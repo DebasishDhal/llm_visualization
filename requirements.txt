@@ -1,0 +1,4 @@
+transformers>=4.50,<5
+accelerate>=1.2
+safetensors>=0.5
+plotly>=5.18
