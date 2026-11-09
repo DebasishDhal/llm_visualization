@@ -305,9 +305,9 @@ def run_trace(model_id, prompt, access_token):
     summary, attn, qkv, acts, path, logits = render_trace(trace, layer, head, token_index)
     return (
         trace,
-        gr.Slider(minimum=0, maximum=max(0, len(trace["attentions"]) - 1), value=layer, step=1, label="Layer"),
-        gr.Slider(minimum=0, maximum=max(0, trace["n_heads"] - 1), value=head, step=1, label="Attention head"),
-        gr.Slider(minimum=0, maximum=max(0, len(trace["tokens"]) - 1), value=token_index, step=1, label="Selected token"),
+        gr.Slider(minimum=0, maximum=max(1, len(trace["attentions"]) - 1), value=layer, step=1, label="Layer"),
+        gr.Slider(minimum=0, maximum=max(1, trace["n_heads"] - 1), value=head, step=1, label="Attention head"),
+        gr.Slider(minimum=0, maximum=max(1, len(trace["tokens"]) - 1), value=token_index, step=1, label="Selected token"),
         summary, attn, qkv, acts, path, logits,
     )
 
@@ -321,7 +321,7 @@ CSS = """
 footer{opacity:.75}
 """
 
-with gr.Blocks(title="TraceSpace — Transformer Explorer", theme=gr.themes.Soft(primary_hue="green", neutral_hue="slate"), css=CSS) as demo:
+with gr.Blocks(title="TraceSpace — Transformer Explorer") as demo:
     gr.Markdown("""
     # TraceSpace · Transformer Explorer
     Follow prompt tokens through attention heads, Q/K/V projections, FFN activations, residual streams, hidden states, and next-token logits.
@@ -338,9 +338,9 @@ with gr.Blocks(title="TraceSpace — Transformer Explorer", theme=gr.themes.Soft
     summary = gr.Markdown("Choose a model and prompt, then click **Trace on ZeroGPU**.")
 
     with gr.Row():
-        layer_slider = gr.Slider(0, 0, value=0, step=1, label="Layer", scale=2)
-        head_slider = gr.Slider(0, 0, value=0, step=1, label="Attention head", scale=1)
-        token_slider = gr.Slider(0, 0, value=0, step=1, label="Selected token", scale=2)
+        layer_slider = gr.Slider(0, 1, value=0, step=1, label="Layer", scale=2)
+        head_slider = gr.Slider(0, 1, value=0, step=1, label="Attention head", scale=1)
+        token_slider = gr.Slider(0, 1, value=0, step=1, label="Selected token", scale=2)
     with gr.Row():
         with gr.Column(scale=1, elem_classes="panel"):
             attention_plot = gr.Plot(label="Attention map")
@@ -367,5 +367,6 @@ with gr.Blocks(title="TraceSpace — Transformer Explorer", theme=gr.themes.Soft
         control.change(render_trace, inputs=view_inputs, outputs=view_outputs, show_progress="hidden")
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=gr.themes.Soft(primary_hue="green", neutral_hue="slate"), css=CSS)
+
 
