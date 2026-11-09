@@ -96,7 +96,7 @@ def analyze_model(model_id, prompt, access_token):
     token = (access_token or "").strip() or None
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_id, token=token)
-        model_kwargs = {"token": token, "torch_dtype": "auto", "device_map": "auto"}
+        model_kwargs = {"token": token, "dtype": "auto", "device_map": "auto"}
         try:
             model = AutoModelForCausalLM.from_pretrained(
                 model_id, attn_implementation="eager", **model_kwargs
@@ -368,3 +368,4 @@ with gr.Blocks(title="TraceSpace — Transformer Explorer", theme=gr.themes.Soft
 
 if __name__ == "__main__":
     demo.launch()
+

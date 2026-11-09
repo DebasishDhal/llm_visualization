@@ -5,7 +5,7 @@ colorFrom: green
 colorTo: blue
 sdk: gradio
 app_file: app.py
-python_version: 3.10
+python_version: 3.12.12
 hardware: zero-a10g
 short_description: Explore transformer internals on ZeroGPU
 ---
@@ -28,3 +28,5 @@ The app runs one forward pass over the prompt. Its final chart shows next-token 
 
 - `app.py` — Gradio Blocks UI, ZeroGPU inference, and interactive plots.
 - `requirements.txt` — additional runtime dependencies. Gradio, PyTorch, and `spaces` are provided by the Hugging Face Space runtime.
+
+
