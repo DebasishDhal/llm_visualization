@@ -1,17 +1,45 @@
+
 name: Sync to Hugging Face hub
+
 on:
-  # to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
-      - name: Push to hub
+
+      - name: Verify HF token
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://DebasishDhal99:$HF_TOKEN@huggingface.co/spaces/DebasishDhal99/LLM-Visualization main
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN is EMPTY"
+            exit 1
+          fi
+          echo "HF_TOKEN is present"
+
+      - name: Install Hugging Face Hub
+        run: pip install -U huggingface_hub
+
+      - name: Authenticate and push
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Configure Git credential storage
+          git config --global credential.helper store
+
+          # Authenticate with Hugging Face
+          hf auth login --token "$HF_TOKEN" --add-to-git-credential
+
+          # Verify identity
+          hf auth whoami
+
+          # Push to Hugging Face Space
+          git push --force https://huggingface.co/spaces/DebasishDhal99/LLM-Visualization HEAD:main
