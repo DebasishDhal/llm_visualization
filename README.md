@@ -12,7 +12,7 @@ short_description: Explore transformer internals on ZeroGPU
 
 # TraceSpace — Transformer Explorer
 
-A Gradio Space for tracing a prompt through Hugging Face causal language models. It visualizes attention maps, Q/K/V vectors when the model exposes recognizable projection layers, hidden states, FFN and residual-stream norms, and the next-token distribution.
+A Gradio Space for tracing a prompt through Hugging Face causal language models. It visualizes attention maps, Q/K/V vectors when the model exposes recognizable projection layers, hidden states, FFN and residual-stream norms, and the next-token distribution. The separate **Layers & Norms** tab maps transformer blocks and plots normalization-module outputs.
 
 ## Hugging Face Space setup
 
@@ -28,5 +28,6 @@ The app runs one forward pass over the prompt. Its final chart shows next-token 
 
 - `app.py` — Gradio Blocks UI, ZeroGPU inference, and interactive plots.
 - `requirements.txt` — additional runtime dependencies. Gradio, PyTorch, and `spaces` are provided by the Hugging Face Space runtime.
+
 
 

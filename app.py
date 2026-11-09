@@ -1,6 +1,5 @@
 import gc
 import re
-import threading
 import time
 
 import gradio as gr
@@ -128,18 +127,56 @@ def analyze_model(model_id, prompt, access_token):
                 captures["qkv"].setdefault(layer, {})[kind] = saved
         return capture
 
-    def make_norm_hook(layer, kind):
+    def make_scalar_hook(layer, kind):
         def capture(_module, _inputs, output):
             values = _norm_per_token(_first_tensor(output), seq_len)
             if values is not None:
                 captures[kind][layer] = values
         return capture
 
+    def make_norm_hook(layer, module_name, module_type):
+        def capture(_module, _inputs, output):
+            value = _first_tensor(output)
+            if value is None:
+                return
+            value = value.detach().float()
+            if value.ndim >= 3:
+                value = value[0]
+            if value.ndim < 2 or value.shape[0] != seq_len:
+                return
+            rows = value.reshape(seq_len, -1)
+            captures["norm"].setdefault(layer, []).append({
+                "path": module_name,
+                "type": module_type,
+                "norms": torch.linalg.vector_norm(rows, dim=-1).cpu().tolist(),
+                "features": rows[:, :MAX_FEATURES].cpu().numpy().astype(np.float16).tolist(),
+            })
+        return capture
+
+    architecture_modules = {}
+    norm_leaf = re.compile(r"(?:norm|layernorm|rmsnorm)$|^ln_?\d+$", re.I)
+    attention_leaf = re.compile(r"(?:self_attn|attention|attn)$", re.I)
     for name, module in model.named_modules():
         layer = _layer_index(name)
-        if layer is None:
-            continue
         leaf = name.rsplit(".", 1)[-1]
+        module_type = module.__class__.__name__
+        if layer is None:
+            if norm_leaf.search(leaf):
+                hooks.append(module.register_forward_hook(make_norm_hook(-1, name, module_type)))
+            continue
+        info = architecture_modules.setdefault(layer, {"block": None, "attention": [], "ffn": [], "norms": []})
+        if leaf.isdigit():
+            info["block"] = name
+            hooks.append(module.register_forward_hook(make_scalar_hook(layer, "residual")))
+        if attention_leaf.search(leaf):
+            info["attention"].append(name)
+        if leaf.lower() in {"mlp", "feed_forward", "feedforward", "ffn"}:
+            info["ffn"].append(name)
+            hooks.append(module.register_forward_hook(make_scalar_hook(layer, "ffn")))
+        if norm_leaf.search(leaf):
+            info["norms"].append({"path": name, "type": module_type})
+            hooks.append(module.register_forward_hook(make_norm_hook(layer, name, module_type)))
+
         matched = False
         for kind, pattern in PROJECTION_PATTERNS.items():
             if pattern.search(leaf):
@@ -158,12 +195,6 @@ def analyze_model(model_id, prompt, access_token):
                     if saved is not None:
                         captures["qkv"].setdefault(layer, {})[kind] = saved
             hooks.append(module.register_forward_hook(capture_fused))
-        if leaf.lower() in {"mlp", "feed_forward", "feedforward", "ffn"}:
-            hooks.append(module.register_forward_hook(make_norm_hook(layer, "ffn")))
-        elif leaf.lower() in {"input_layernorm", "post_attention_layernorm", "ln_1", "ln_2", "norm"}:
-            hooks.append(module.register_forward_hook(make_norm_hook(layer, "norm")))
-        elif name.rsplit(".", 1)[-1].isdigit() and _layer_index(name) is not None:
-            hooks.append(module.register_forward_hook(make_norm_hook(layer, "residual")))
 
     started = time.time()
     try:
@@ -193,6 +224,16 @@ def analyze_model(model_id, prompt, access_token):
         logits = [{"token": _pretty_token(tokenizer.convert_ids_to_tokens(int(idx))), "probability": float(prob)}
                   for prob, idx in zip(top.values.cpu(), top.indices.cpu())]
         layer_count = len(attention_data)
+        architecture = []
+        for i in range(layer_count):
+            info = architecture_modules.get(i, {})
+            architecture.append({
+                "layer": i,
+                "block": info.get("block") or f"Transformer block {i}",
+                "attention": info.get("attention", []),
+                "ffn": info.get("ffn", []),
+                "norms": info.get("norms", []),
+            })
         trace = {
             "model": model_id,
             "tokens": token_labels,
@@ -202,7 +243,8 @@ def analyze_model(model_id, prompt, access_token):
             "qkv": captures["qkv"],
             "ffn_norms": [captures["ffn"].get(i) for i in range(layer_count)],
             "residual_norms": [captures["residual"].get(i) for i in range(layer_count)],
-            "norm_norms": [captures["norm"].get(i) for i in range(layer_count)],
+            "norm_layers": {str(i): entries for i, entries in captures["norm"].items()},
+            "architecture": architecture,
             "logits": logits,
             "elapsed": time.time() - started,
             "n_heads": int(attention_data[0].__len__()),
@@ -312,6 +354,60 @@ def run_trace(model_id, prompt, access_token):
     )
 
 
+def render_layer_tab(trace, layer=0, norm_name=None, token_index=0):
+    empty = _empty_plot("Run a trace to inspect the model structure")
+    if not trace:
+        return gr.Slider(0, 1, value=0, step=1, label="Layer (last position is final norm)"), gr.Dropdown(choices=[], label="Normalization module"), [], empty, empty, "Run a trace to discover the model's layer and normalization modules."
+
+    architecture = trace["architecture"]
+    layer_count = len(architecture)
+    layer = max(0, min(int(layer or 0), layer_count))
+    token_index = max(0, min(int(token_index or 0), len(trace["tokens"]) - 1))
+    final_norm = layer == layer_count
+    norm_key = "-1" if final_norm else str(layer)
+    label = "Final normalization" if final_norm else f"Layer {layer}"
+    entries = trace["norm_layers"].get(norm_key, [])
+    choices = [entry["path"] for entry in entries]
+    if norm_name not in choices:
+        norm_name = choices[0] if choices else None
+    selected = next((entry for entry in entries if entry["path"] == norm_name), None)
+
+    x = [str(row["layer"]) for row in architecture] + ["Final"]
+    attention_counts = [1 if row["attention"] else 0 for row in architecture] + [0]
+    ffn_counts = [len(row["ffn"]) for row in architecture] + [0]
+    norm_counts = [len(row["norms"]) for row in architecture] + [len(trace["norm_layers"].get("-1", []))]
+    architecture_fig = go.Figure()
+    architecture_fig.add_trace(go.Bar(x=x, y=attention_counts, name="Attention weights", marker_color="#5a9f70"))
+    architecture_fig.add_trace(go.Bar(x=x, y=ffn_counts, name="FFN modules", marker_color="#d39454"))
+    architecture_fig.add_trace(go.Bar(x=x, y=norm_counts, name="Norm modules", marker_color="#628bb8"))
+    architecture_fig.update_layout(barmode="group", title="Modules detected in each transformer block", xaxis_title="Layer index", yaxis_title="Module count", legend={"orientation": "h", "y": 1.15})
+    _layout(architecture_fig, 330)
+
+    rows = []
+    for spec in architecture:
+        rows.append([
+            str(spec["layer"]), spec["block"], ", ".join(spec["attention"]) or "Attention weights returned",
+            ", ".join(spec["ffn"]) or "Not detected", ", ".join(f"{n['path']} ({n['type']})" for n in spec["norms"]) or "Not detected",
+        ])
+    final_entries = trace["norm_layers"].get("-1", [])
+    rows.append(["Final", "Final model output", "—", "—", ", ".join(f"{n['path']} ({n['type']})" for n in final_entries) or "Not detected"])
+
+    if selected:
+        values = selected["features"]
+        norm_fig = go.Figure(go.Heatmap(z=values, x=list(range(len(values[0]))), y=trace["tokens"], colorscale="RdBu", zmid=0, colorbar={"title": "activation"}, hovertemplate="token %{y}<br>feature %{x}<br>value %{z:.3f}<extra></extra>"))
+        norm_fig.update_layout(title=f"{selected['type']} output · {selected['path']}", xaxis_title="Feature dimension (first 32)", yaxis_title="Token", yaxis={"autorange": "reversed"})
+        _layout(norm_fig, max(300, min(480, 170 + 20 * len(trace["tokens"]))))
+        norm_value = selected["norms"][token_index]
+        detail = f"**{label}** · `{selected['path']}` · {selected['type']} · selected token norm: {norm_value:.3f}"
+    else:
+        norm_fig = _empty_plot("No normalization output was captured for this layer")
+        detail = f"**{label}** · No recognizable normalization module was exposed by this architecture. The structure table shows the module paths detected."
+
+    slider = gr.Slider(minimum=0, maximum=max(1, layer_count), value=layer, step=1, label="Layer (last position is final norm)")
+    dropdown = gr.Dropdown(choices=choices, value=norm_name, label="Normalization module")
+    return slider, dropdown, rows, architecture_fig, norm_fig, detail
+
+
 CSS = """
 .gradio-container{max-width:1440px!important;font-family:Inter,ui-sans-serif,system-ui,sans-serif!important}
 #hero{padding:24px 26px;border:1px solid #e5ece7;border-radius:18px;background:linear-gradient(120deg,#f5faf5,#fff 65%);margin-bottom:16px}
@@ -335,29 +431,48 @@ with gr.Blocks(title="TraceSpace — Transformer Explorer") as demo:
     prompt = gr.Textbox(value="The capital of France is", label="Prompt", lines=3, max_lines=6, placeholder="Enter text to trace through the model…")
     trace_button = gr.Button("Trace on ZeroGPU", variant="primary", size="lg")
     trace_state = gr.State(None)
-    summary = gr.Markdown("Choose a model and prompt, then click **Trace on ZeroGPU**.")
 
-    with gr.Row():
-        layer_slider = gr.Slider(0, 1, value=0, step=1, label="Layer", scale=2)
-        head_slider = gr.Slider(0, 1, value=0, step=1, label="Attention head", scale=1)
-        token_slider = gr.Slider(0, 1, value=0, step=1, label="Selected token", scale=2)
-    with gr.Row():
-        with gr.Column(scale=1, elem_classes="panel"):
-            attention_plot = gr.Plot(label="Attention map")
-        with gr.Column(scale=1, elem_classes="panel"):
-            qkv_plot = gr.Plot(label="Q/K/V vectors")
-    with gr.Row():
-        with gr.Column(scale=1, elem_classes="panel"):
-            activation_plot = gr.Plot(label="Hidden state and FFN/residual signals")
-        with gr.Column(scale=1, elem_classes="panel"):
-            path_plot = gr.Plot(label="Token journey through layers")
-    with gr.Row():
-        with gr.Column(scale=1, elem_classes="panel"):
-            logits_plot = gr.Plot(label="Final token probabilities")
+    with gr.Tabs():
+        with gr.Tab("Token Trace"):
+            summary = gr.Markdown("Choose a model and prompt, then click **Trace on ZeroGPU**.")
+            with gr.Row():
+                layer_slider = gr.Slider(0, 1, value=0, step=1, label="Layer", scale=2)
+                head_slider = gr.Slider(0, 1, value=0, step=1, label="Attention head", scale=1)
+                token_slider = gr.Slider(0, 1, value=0, step=1, label="Selected token", scale=2)
+            with gr.Row():
+                with gr.Column(scale=1, elem_classes="panel"):
+                    attention_plot = gr.Plot(label="Attention map")
+                with gr.Column(scale=1, elem_classes="panel"):
+                    qkv_plot = gr.Plot(label="Q/K/V vectors")
+            with gr.Row():
+                with gr.Column(scale=1, elem_classes="panel"):
+                    activation_plot = gr.Plot(label="Hidden state and FFN/residual signals")
+                with gr.Column(scale=1, elem_classes="panel"):
+                    path_plot = gr.Plot(label="Token journey through layers")
+            with gr.Row():
+                with gr.Column(scale=1, elem_classes="panel"):
+                    logits_plot = gr.Plot(label="Final token probabilities")
+            gr.Markdown("""
+            **Notes:** A trace runs the prompt once and reads its next-token distribution; it does not generate a long completion. Input is capped at 48 tokens to keep attention capture manageable. Very large models may exceed the available ZeroGPU memory. Gated models require an access token. Custom model code is not enabled (`trust_remote_code=False`).
+            """)
 
-    gr.Markdown("""
-    **Notes:** A trace runs the prompt once and reads its next-token distribution; it does not generate a long completion. Input is capped at 48 tokens to keep attention capture manageable. Very large models may exceed the available ZeroGPU memory. Gated models require an access token. Custom model code is not enabled (`trust_remote_code=False`).
-    """)
+        with gr.Tab("Layers & Norms"):
+            gr.Markdown("Inspect the detected transformer block layout, then select a normalization module to view its output across tokens and feature dimensions.")
+            with gr.Row():
+                layer_detail_slider = gr.Slider(0, 1, value=0, step=1, label="Layer (last position is final norm)", scale=1)
+                norm_selector = gr.Dropdown(choices=[], label="Normalization module", scale=3)
+            layer_detail_summary = gr.Markdown("Run a trace to discover the model's layer and normalization modules.")
+            with gr.Row():
+                with gr.Column(scale=1, elem_classes="panel"):
+                    architecture_plot = gr.Plot(label="Transformer block map")
+                with gr.Column(scale=1, elem_classes="panel"):
+                    norm_plot = gr.Plot(label="Normalization output")
+            layer_table = gr.Dataframe(
+                headers=["Layer", "Block module", "Attention module paths", "FFN module paths", "Normalization modules"],
+                datatype=["str", "str", "str", "str", "str"],
+                interactive=False,
+                label="Detected model structure",
+            )
 
     trace_outputs = [trace_state, layer_slider, head_slider, token_slider, summary, attention_plot, qkv_plot, activation_plot, path_plot, logits_plot]
     trace_button.click(run_trace, inputs=[model_id, prompt, access_token], outputs=trace_outputs)
@@ -365,6 +480,13 @@ with gr.Blocks(title="TraceSpace — Transformer Explorer") as demo:
     view_inputs = [trace_state, layer_slider, head_slider, token_slider]
     for control in (layer_slider, head_slider, token_slider):
         control.change(render_trace, inputs=view_inputs, outputs=view_outputs, show_progress="hidden")
+
+    layer_tab_outputs = [layer_detail_slider, norm_selector, layer_table, architecture_plot, norm_plot, layer_detail_summary]
+    layer_tab_inputs = [trace_state, layer_detail_slider, norm_selector, token_slider]
+    trace_state.change(render_layer_tab, inputs=layer_tab_inputs, outputs=layer_tab_outputs, show_progress="hidden")
+    layer_detail_slider.change(render_layer_tab, inputs=layer_tab_inputs, outputs=layer_tab_outputs, show_progress="hidden")
+    norm_selector.change(render_layer_tab, inputs=layer_tab_inputs, outputs=layer_tab_outputs, show_progress="hidden")
+
 
 if __name__ == "__main__":
     demo.launch(theme=gr.themes.Soft(primary_hue="green", neutral_hue="slate"), css=CSS)
