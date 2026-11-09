@@ -1,11 +1,37 @@
-- name: Verify HF token
-  env:
-    HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: |
-    if [ -z "$HF_TOKEN" ]; then
-      echo "HF_TOKEN is EMPTY"
-      exit 1
-    else
-      echo "HF_TOKEN is present"
-      echo "Token length: ${#HF_TOKEN}"
-    fi
+
+name: Sync to Hugging Face hub
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Verify HF token
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_TOKEN is EMPTY"
+            exit 1
+          fi
+          echo "HF_TOKEN is present"
+
+      - name: Install Hugging Face Hub
+        run: pip install -U huggingface_hub
+
+      - name: Authenticate and push
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          hf auth whoami --token "$HF_TOKEN"
+          hf auth login --token "$HF_TOKEN" --add-to-git-credential
+          git push --force https://huggingface.co/spaces/DebasishDhal99/LLM-Visualization HEAD:main
