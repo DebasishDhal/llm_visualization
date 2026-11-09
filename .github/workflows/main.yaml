@@ -32,9 +32,13 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          # Configure Git credential storage
+          git config --global credential.helper store
+
+          # Authenticate with Hugging Face
           hf auth login --token "$HF_TOKEN" --add-to-git-credential
 
-          # Verify authenticated account
+          # Verify identity
           hf auth whoami
 
           # Push to Hugging Face Space
