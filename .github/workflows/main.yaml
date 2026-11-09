@@ -32,6 +32,10 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          hf auth whoami --token "$HF_TOKEN"
           hf auth login --token "$HF_TOKEN" --add-to-git-credential
+
+          # Verify authenticated account
+          hf auth whoami
+
+          # Push to Hugging Face Space
           git push --force https://huggingface.co/spaces/DebasishDhal99/LLM-Visualization HEAD:main
