@@ -20,7 +20,7 @@ This repository is configured for the Gradio SDK and ZeroGPU. Select **ZeroGPU**
 
 ## Model support
 
-Enter a public Transformers causal language model ID. Gated models require an HF read token in the UI. The app sets `trust_remote_code=False`, so models that require arbitrary custom Python code are not loaded. Attention weights must be supported by the model's Transformers implementation. Q/K/V projection charts appear for common named projection modules; fused or unusual architectures may not expose separate Q/K/V outputs. Input traces are limited to 48 tokens to bound attention memory. Large models can exceed ZeroGPU's available memory.
+Choose one of four small presets (general chat, coding, multilingual chat, or base text completion), or edit the model ID field for another public Transformers causal language model. Gated models require an HF read token in the UI. The app sets `trust_remote_code=False`, so models that require arbitrary custom Python code are not loaded. Attention weights must be supported by the model's Transformers implementation. Q/K/V projection charts appear for common named projection modules; fused or unusual architectures may not expose separate Q/K/V outputs. Input traces are limited to 48 tokens to bound attention memory. Large models can exceed ZeroGPU's available memory.
 
 The app runs one forward pass over the prompt. Its final chart shows next-token probabilities; it does not generate a completion.
 

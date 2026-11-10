@@ -425,9 +425,21 @@ with gr.Blocks(title="TraceSpace — Transformer Explorer") as demo:
     **Model execution happens on Hugging Face ZeroGPU.** Public Transformers causal language models are supported when their architecture returns attention weights; model-specific projection visualizations depend on exposed Q/K/V modules.
     """, elem_id="hero")
 
+    model_presets = gr.Dropdown(
+        choices=[
+            ("General chat · SmolLM2 360M Instruct", "HuggingFaceTB/SmolLM2-360M-Instruct"),
+            ("Coding · Qwen2.5 Coder 0.5B Instruct", "Qwen/Qwen2.5-Coder-0.5B-Instruct"),
+            ("Multilingual chat · Qwen2.5 0.5B Instruct", "Qwen/Qwen2.5-0.5B-Instruct"),
+            ("Base text completion · SmolLM2 360M", "HuggingFaceTB/SmolLM2-360M"),
+        ],
+        value="HuggingFaceTB/SmolLM2-360M-Instruct",
+        label="Quick model presets",
+        info="Choose a model type to fill the editable model ID below, or enter any other supported ID.",
+    )
     with gr.Row():
         model_id = gr.Textbox(value="HuggingFaceTB/SmolLM2-360M-Instruct", label="Hugging Face model ID", placeholder="organization/model-name", scale=3)
         access_token = gr.Textbox(type="password", label="HF token (optional; gated models)", placeholder="hf_…", scale=2)
+    model_presets.change(lambda selected: selected, inputs=model_presets, outputs=model_id)
     prompt = gr.Textbox(value="The capital of France is", label="Prompt", lines=3, max_lines=6, placeholder="Enter text to trace through the model…")
     trace_button = gr.Button("Trace on ZeroGPU", variant="primary", size="lg")
     trace_state = gr.State(None)
